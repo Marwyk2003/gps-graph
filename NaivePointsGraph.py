@@ -2,14 +2,15 @@ import numpy as np
 
 
 class NaivePointsGraph:
-    def __init__(self, dist_acc=0.001):
+    def __init__(self, dist_acc=20, colinear_acc=np.pi / 10):
+        self.dist_acc = dist_acc
+        self.colinear_acc = colinear_acc
         self._points = {}  # (long, lat)
         self._edges = {}  # (point_idx, point_idx)
-        self.dist_acc = dist_acc
         self._last_v = -1
 
     def insert_vertex(self, long, lat, debug=False):
-        closest = self.find_closest(long, lat)
+        closest = self._find_closest(long, lat)
         if closest is None or self.dist(long, lat, *self.get_vertex(closest)) > self.dist_acc:
             self._last_v += 1
             self._points[self._last_v] = (long, lat)
@@ -18,19 +19,20 @@ class NaivePointsGraph:
             print(f'Merging point with {self.get_vertex(closest)}')
 
     def insert_edge(self, long1, lat1, long2, lat2, debug=False):
-        closest1 = self.find_closest(long1, lat1)
-        closest2 = self.find_closest(long2, lat2)
-        if (closest1 != closest2 and
-                self.dist(long1, lat1, *self.get_vertex(closest1)) <= self.dist_acc and
-                self.dist(long2, lat2, *self.get_vertex(closest2)) <= self.dist_acc):
-            self._edges[closest1].add(closest2)
-            self._edges[closest2].add(closest1)
+        # find key-points
+        ui1 = self._find_closest(long1, lat1)
+        ui2 = self._find_closest(long2, lat2)
+        if (ui1 != ui2 and
+                self.dist(long1, lat1, *self.get_vertex(ui1)) <= self.dist_acc and
+                self.dist(long2, lat2, *self.get_vertex(ui2)) <= self.dist_acc):
+            # snap to key-points
+            self._edges[ui1].add(ui2)
+            self._edges[ui2].add(ui1)
+            # check if neighbors can be removed due to co-linearity
+            self._remove_colinear(ui1)
+            self._remove_colinear(ui2)
         elif debug:
             print('Edge cannot be added, keypoint for one of the points was not found')
-
-    def insert_edge_i(self, vi, ui, debug=False):
-        self._edges[vi].add(ui)
-        self._edges[ui].add(vi)
 
     def get_vertex(self, vi):
         return self._points[vi]
@@ -38,27 +40,31 @@ class NaivePointsGraph:
     def get_edges(self, vi):
         return self._edges[vi]
 
-    def remove_vertex(self, vi):
-        del self._edges[vi]
-        del self._points[vi]
-
-    def remove_edge(self, vi, ui):
-        self._edges[ui].remove(vi)
-        self._edges[vi].remove(ui)
-
     def list_vertices(self):
-        return list(zip(*self._points.values()))
+        return self._points.values()
 
     def list_edges(self):
         return [(*self.get_vertex(k), *self.get_vertex(v)) for k, n in self._edges.items() for v in n if v > k]
 
-    def find_closest(self, long, lat):
+    def _find_closest(self, long, lat):
         if len(self._points) == 0:
             return None
-        return min(range(len(self._points)), key=lambda i: self.dist(long, lat, *self.get_vertex(i)))
+        return min(self._points.keys(), key=lambda i: self.dist(long, lat, *self.get_vertex(i)))
 
-    def size(self):
-        return len(self._points)
+    def _remove_colinear(self, vi):
+        if len(self.get_edges(vi)) != 2:
+            return
+        v = self.get_vertex(vi)
+        ui1, ui2 = self.get_edges(vi)
+        u1, u2 = self.get_vertex(ui1), self.get_vertex(ui2)
+        a1, a2 = self.azimuth(*u1, *v), self.azimuth(*v, *u2)
+        if a1 - self.colinear_acc <= a2 <= a1 + self.colinear_acc:
+            del self._edges[vi]
+            del self._points[vi]
+            self._edges[ui1].remove(vi)
+            self._edges[ui2].remove(vi)
+            self._edges[ui1].add(ui2)
+            self._edges[ui2].add(ui1)
 
     @staticmethod
     def dist(long1, lat1, long2, lat2):
